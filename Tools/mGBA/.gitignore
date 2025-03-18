@@ -1,0 +1,5 @@
+config.ini
+qt.ini
+
+library.sqlite3
+nointro.sqlite3

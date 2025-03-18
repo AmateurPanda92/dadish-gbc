@@ -1,2 +1,2 @@
 REM Automatically generated from Makefile
-..\..\..\bin\lcc   -o Example.gb main.c 
+..\Build\GBDK-2020\bin\lcc   -o Example.gb main.c 
