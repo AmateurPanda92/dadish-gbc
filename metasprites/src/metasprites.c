@@ -33,7 +33,7 @@
 
 // During build, png2asset metasprite conversion will write output to: obj/<platform ext>/res/
 //  Makefile adds part of that path as an include when compiling. Example: -Iobj/gb
-#include <res/sprite.h>
+#include <Resources/sprite.h>
 
 // Constants for tile dimensions
 #define TILE_WIDTH          8
