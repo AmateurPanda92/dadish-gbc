@@ -21,7 +21,7 @@ cd .\Scripts\
 ```ps
 .\Compile.bat
 ```
-4. The output binary, `Dadish.gb`, will be generated in the `/Output` directory.
+4. The output binary, `Dadish.gbc`, will be generated in the `/Output` directory.
 
 ### Running
 
