@@ -1,6 +1,3 @@
-//
-// Cross-platform metasprites example.
-//
 // This examples demonstrates the following features in GBDK's metasprite support.
 //
 // * Drawing a metasprite with optional X/Y flipping using hardware flipping
@@ -18,54 +15,57 @@
 // of move_metasprite_* is used to switch between 4 different sub-palettes.
 // Note that SMS and GG do NOT support sub-palettes for sprites, and this example
 // will display the same colors when built for these targets.
-//
-// Joypad buttons:
-// 
-// cursor -> Moves metasprite position in X/Y
-// A      -> Rotates the metasprite through X/Y flip states, and then through sub-palettes
-// B      -> Animates the metasprite
-//
+
+#include <stdint.h>
 
 #include <gbdk/platform.h>
 #include <gbdk/metasprites.h>
 
-#include <stdint.h>
-
-// During build, png2asset metasprite conversion will write output to: obj/<platform ext>/res/
-//  Makefile adds part of that path as an include when compiling. Example: -Iobj/gb
 #include <Resources/sprite.h>
 
-// Constants for tile dimensions
-#define TILE_WIDTH          8
-#define TILE_HEIGHT         8
-#define NUM_BYTES_PER_TILE  16
+#define TILE_WIDTH 8
+#define TILE_HEIGHT 8
 
-const uint8_t pattern[] = {0x80,0x80,0x40,0x40,0x20,0x20,0x10,0x10,0x08,0x08,0x04,0x04,0x02,0x02,0x01,0x01};
+#define NUMBER_OF_BYTES_PER_TILE 16
 
-#define ACC_X 1
-#define ACC_Y 2
+#define X_MOVEMENT_ON_THIS_FRAME 1
+#define Y_MOVEMENT_ON_THIS_FRAME 2
 
-// The metasprite will be built starting with hardware sprite zero (the first)
-#define SPR_NUM_START 0
+#define METASPRITE_OAM_START_INDEX 0
+#define METASPRITE_TILE_VRAM_OFFSET 0
 
-// Metasprite tiles are loaded into VRAM starting at tile number 0 
-#define TILE_NUM_START 0
+const uint8_t background_tile_graphics_data[] = {
+    0b10000000, 0b10000000,
+    0b01000000, 0b01000000,
+    0b00100000, 0b00100000,
+    0b00010000, 0b00010000,
+    0b00001000, 0b00001000,
+    0b00000100, 0b00000100,
+    0b00000010, 0b00000010,
+    0b00000001, 0b00000001
+};
 
-// sprite coords
-int16_t PosX, PosY;
-int16_t SpdX, SpdY;
-uint8_t PosF;
-uint8_t idx, rot;
+int16_t sprite_x_position;
+int16_t sprite_y_position;
+int16_t sprite_x_velocity;
+int16_t sprite_y_velocity;
 
-uint8_t flipped_data[NUM_BYTES_PER_TILE];
+uint8_t directional_input_flags;
+uint8_t current_animation_frame_index;
+uint8_t flip_rotation_and_palette_state;
 
-size_t num_tiles;
+uint8_t tile_transformation_buffer[NUMBER_OF_BYTES_PER_TILE];
 
-uint8_t joyp = 0, old_joyp = 0;
+size_t total_number_of_sprite_tiles;
 
-#define KEY_INPUT (old_joyp = joyp, joyp = joypad())
-#define KEY_DOWN(KEY) (joyp & (KEY))
-#define KEY_PRESSED(KEY) ((joyp ^ old_joyp) & joyp & (KEY))
+uint8_t input_flags_this_frame = 0;
+uint8_t input_flags_last_frame = 0;
+
+// TODO: Continue from here down...
+
+#define KEY_INPUT (input_flags_last_frame = input_flags_this_frame, input_flags_this_frame = joypad())
+#define KEY_DOWN(KEY) (input_flags_this_frame & (KEY))
+#define KEY_PRESSED(KEY) ((input_flags_this_frame ^ input_flags_last_frame) & input_flags_this_frame & (KEY))
 
 // Table for fast reversing of bits in a byte - used for flipping in X
 const uint8_t reverse_bits[256] = {
@@ -97,10 +97,10 @@ void set_tile(uint8_t tile_idx, uint8_t* data, uint8_t flip_x, uint8_t flip_y)
     for(i = 0; i < TILE_HEIGHT; i++)
     {
         size_t y = flip_y ? (TILE_HEIGHT-1-i) : i; 
-        flipped_data[2*i] = flip_x ? reverse_bits[data[2*y]] : data[2*y];
-        flipped_data[2*i+1] = flip_x ? reverse_bits[data[2*y+1]] : data[2*y+1];
+        tile_transformation_buffer[2*i] = flip_x ? reverse_bits[data[2*y]] : data[2*y];
+        tile_transformation_buffer[2*i+1] = flip_x ? reverse_bits[data[2*y+1]] : data[2*y+1];
     }
-    set_sprite_data(tile_idx, 1, flipped_data);
+    set_sprite_data(tile_idx, 1, tile_transformation_buffer);
 }
 
 uint8_t get_tile_offset(uint8_t flipx, uint8_t flipy)
@@ -108,11 +108,11 @@ uint8_t get_tile_offset(uint8_t flipx, uint8_t flipy)
     flipx; flipy; // suppress compiler warnings
     uint8_t offset = 0;
 #if !HARDWARE_SPRITE_CAN_FLIP_Y
-    offset += flipy ? num_tiles : 0;
+    offset += flipy ? total_number_of_sprite_tiles : 0;
 #endif
 #if !HARDWARE_SPRITE_CAN_FLIP_X
     offset <<= 1;
-    offset += flipx ? num_tiles : 0;
+    offset += flipx ? total_number_of_sprite_tiles : 0;
 #endif
     return offset;
 }
@@ -123,8 +123,8 @@ uint8_t get_tile_offset(uint8_t flipx, uint8_t flipy)
 void load_and_duplicate_sprite_tile_data(void)
 {
     size_t i;
-    num_tiles = sizeof(sprite_tiles) >> 4;
-    for(i = 0; i < num_tiles; i++)
+    total_number_of_sprite_tiles = sizeof(sprite_tiles) >> 4;
+    for(i = 0; i < total_number_of_sprite_tiles; i++)
     {
         set_tile(i + get_tile_offset(0, 0), sprite_tiles + (i << 4), 0, 0);
 #if !HARDWARE_SPRITE_CAN_FLIP_X
@@ -173,11 +173,11 @@ void main(void) {
     set_sprite_palette(3, 1, green_pal);
 #endif
 
-    // Fill the screen background with a single tile pattern
+    // Fill the screen background with a single tile background_tile_graphics_data
     fill_bkg_rect(0, 0, DEVICE_SCREEN_WIDTH, DEVICE_SCREEN_HEIGHT, 0);
 
     // Set tile data for background
-    set_bkg_data(0, 1, pattern);
+    set_bkg_data(0, 1, background_tile_graphics_data);
 
     // Load (and flip) sprite tile data
     load_and_duplicate_sprite_tile_data();
@@ -194,51 +194,51 @@ void main(void) {
     DISPLAY_ON;
 
     // Set initial position to the center of the screen, zero out speed
-    PosX = (DEVICE_SCREEN_PX_WIDTH / 2) << 4;
-    PosY = (DEVICE_SCREEN_PX_HEIGHT / 2) << 4;
-    SpdX = SpdY = 0;
+    sprite_x_position = (DEVICE_SCREEN_PX_WIDTH / 2) << 4;
+    sprite_y_position = (DEVICE_SCREEN_PX_HEIGHT / 2) << 4;
+    sprite_x_velocity = sprite_y_velocity = 0;
 
-    idx = 0; rot = 0;
+    current_animation_frame_index = 0; flip_rotation_and_palette_state = 0;
 
     while(TRUE) {        
         // Poll joypads
         KEY_INPUT;
         
-        PosF = 0;
+        directional_input_flags = 0;
         // Game object
         if (KEY_DOWN(J_UP)) {
-            SpdY -= 2;
-            if (SpdY < -32) SpdY = -32;
-            PosF |= ACC_Y;
+            sprite_y_velocity -= 2;
+            if (sprite_y_velocity < -32) sprite_y_velocity = -32;
+            directional_input_flags |= Y_MOVEMENT_ON_THIS_FRAME;
         } else if (KEY_DOWN(J_DOWN)) {
-            SpdY += 2;
-            if (SpdY > 32) SpdY = 32;
-            PosF |= ACC_Y;
+            sprite_y_velocity += 2;
+            if (sprite_y_velocity > 32) sprite_y_velocity = 32;
+            directional_input_flags |= Y_MOVEMENT_ON_THIS_FRAME;
         }
 
         if (KEY_DOWN(J_LEFT)) {
-            SpdX -= 2;
-            if (SpdX < -32) SpdX = -32;
-            PosF |= ACC_X;
+            sprite_x_velocity -= 2;
+            if (sprite_x_velocity < -32) sprite_x_velocity = -32;
+            directional_input_flags |= X_MOVEMENT_ON_THIS_FRAME;
         } else if (KEY_DOWN(J_RIGHT)) {
-            SpdX += 2;
-            if (SpdX > 32) SpdX = 32;
-            PosF |= ACC_X;
+            sprite_x_velocity += 2;
+            if (sprite_x_velocity > 32) sprite_x_velocity = 32;
+            directional_input_flags |= X_MOVEMENT_ON_THIS_FRAME;
         }
 
         // Press B button to cycle through metasprite animations
         if (KEY_PRESSED(J_B)) {
-            idx++; if (idx >= (sizeof(sprite_metasprites) >> 1)) idx = 0;
+            current_animation_frame_index++; if (current_animation_frame_index >= (sizeof(sprite_metasprites) >> 1)) current_animation_frame_index = 0;
         }
 
         // Press A button to cycle metasprite through Normal/Flip-Y/Flip-XY/Flip-X and sub-pals
         if (KEY_PRESSED(J_A)) {
-            rot++; rot &= 0xF;
+            flip_rotation_and_palette_state++; flip_rotation_and_palette_state &= 0xF;
         }
 
-        PosX += SpdX, PosY += SpdY; 
+        sprite_x_position += sprite_x_velocity, sprite_y_position += sprite_y_velocity; 
 
-        uint8_t hiwater = SPR_NUM_START;
+        uint8_t hiwater = METASPRITE_OAM_START_INDEX;
 
         // NOTE: In a real game it would be better to only call the move_metasprite..()
         //       functions if something changed (such as movement or rotation). That
@@ -247,39 +247,39 @@ void main(void) {
         // In this example they are called every frame to simplify the example code
 
         // If not hidden the move and apply rotation to the metasprite
-        uint8_t subpal = rot >> 2;
-        switch (rot & 0x3) {
+        uint8_t subpal = flip_rotation_and_palette_state >> 2;
+        switch (flip_rotation_and_palette_state & 0x3) {
             case 1:
-                hiwater += move_metasprite_flipy( sprite_metasprites[idx],
-                                                  TILE_NUM_START + get_tile_offset(0, 1),
+                hiwater += move_metasprite_flipy( sprite_metasprites[current_animation_frame_index],
+                                                  METASPRITE_TILE_VRAM_OFFSET + get_tile_offset(0, 1),
                                                   subpal,
                                                   hiwater,
-                                                  DEVICE_SPRITE_PX_OFFSET_X + (PosX >> 4),
-                                                  DEVICE_SPRITE_PX_OFFSET_Y + (PosY >> 4));
+                                                  DEVICE_SPRITE_PX_OFFSET_X + (sprite_x_position >> 4),
+                                                  DEVICE_SPRITE_PX_OFFSET_Y + (sprite_y_position >> 4));
                 break;
             case 2:
-                hiwater += move_metasprite_flipxy(sprite_metasprites[idx],
-                                                  TILE_NUM_START + get_tile_offset(1, 1),
+                hiwater += move_metasprite_flipxy(sprite_metasprites[current_animation_frame_index],
+                                                  METASPRITE_TILE_VRAM_OFFSET + get_tile_offset(1, 1),
                                                   subpal,
                                                   hiwater,
-                                                  DEVICE_SPRITE_PX_OFFSET_X + (PosX >> 4),
-                                                  DEVICE_SPRITE_PX_OFFSET_Y + (PosY >> 4));
+                                                  DEVICE_SPRITE_PX_OFFSET_X + (sprite_x_position >> 4),
+                                                  DEVICE_SPRITE_PX_OFFSET_Y + (sprite_y_position >> 4));
                 break;
             case 3:
-                hiwater += move_metasprite_flipx( sprite_metasprites[idx],
-                                                  TILE_NUM_START + get_tile_offset(1, 0),
+                hiwater += move_metasprite_flipx( sprite_metasprites[current_animation_frame_index],
+                                                  METASPRITE_TILE_VRAM_OFFSET + get_tile_offset(1, 0),
                                                   subpal,
                                                   hiwater,
-                                                  DEVICE_SPRITE_PX_OFFSET_X + (PosX >> 4),
-                                                  DEVICE_SPRITE_PX_OFFSET_Y + (PosY >> 4));
+                                                  DEVICE_SPRITE_PX_OFFSET_X + (sprite_x_position >> 4),
+                                                  DEVICE_SPRITE_PX_OFFSET_Y + (sprite_y_position >> 4));
                 break;
             default:
-                hiwater += move_metasprite_ex(    sprite_metasprites[idx],
-                                                  TILE_NUM_START + get_tile_offset(0, 0),
+                hiwater += move_metasprite_ex(    sprite_metasprites[current_animation_frame_index],
+                                                  METASPRITE_TILE_VRAM_OFFSET + get_tile_offset(0, 0),
                                                   subpal,
                                                   hiwater,
-                                                  DEVICE_SPRITE_PX_OFFSET_X + (PosX >> 4),
-                                                  DEVICE_SPRITE_PX_OFFSET_Y + (PosY >> 4));
+                                                  DEVICE_SPRITE_PX_OFFSET_X + (sprite_x_position >> 4),
+                                                  DEVICE_SPRITE_PX_OFFSET_Y + (sprite_y_position >> 4));
                 break;
         }
 
@@ -287,18 +287,18 @@ void main(void) {
         hide_sprites_range(hiwater, MAX_HARDWARE_SPRITES);        
 
         // Y Axis: update velocity (reduce speed) if no U/D button pressed
-        if (!(PosF & ACC_Y)) {
-            if (SpdY != 0) {
-                if (SpdY > 0) SpdY--;
-                else SpdY ++;
+        if (!(directional_input_flags & Y_MOVEMENT_ON_THIS_FRAME)) {
+            if (sprite_y_velocity != 0) {
+                if (sprite_y_velocity > 0) sprite_y_velocity--;
+                else sprite_y_velocity ++;
             }
         }
 
         // X Axis: update velocity (reduce speed) if no L/R button pressed
-        if (!(PosF & ACC_X)) {
-            if (SpdX != 0) {
-                if (SpdX > 0) SpdX--;
-                else SpdX ++;
+        if (!(directional_input_flags & X_MOVEMENT_ON_THIS_FRAME)) {
+            if (sprite_x_velocity != 0) {
+                if (sprite_x_velocity > 0) sprite_x_velocity--;
+                else sprite_x_velocity ++;
             }
         }
 
